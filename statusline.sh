@@ -373,8 +373,6 @@ format_reset_time() {
     [ -n "$formatted" ] && echo "$formatted"
 }
 
-sep=" ${dim}|${reset} "
-
 # Render extra_usage segment from API usage data (not available via stdin rate_limits).
 # Appends to the global segments array. No-op when data is missing or is_enabled is false.
 render_extra_usage() {
@@ -522,55 +520,10 @@ if [ -n "$cli_version" ]; then
     segments+=("${orange}v${cli_version}${reset}")
 fi
 
-# ===== Output: greedy line-packing when COLUMNS is set, else single line =====
-# Strip ANSI escape sequences to measure visible width.
-visible_width() {
-    local s
-    s=$(printf '%b' "$1" | sed 's/\x1b\[[0-9;]*m//g')
-    printf '%s' "${#s}"
-}
-
-if [[ "$COLUMNS" =~ ^[0-9]+$ ]] && [ "$COLUMNS" -gt 0 ]; then
-    # Greedy packing: accumulate segments onto lines, wrapping at segment boundaries.
-    sep_visible=" | "
-    sep_ansi=" ${dim}|${reset} "
-    current_line=""
-    current_width=0
-    first_on_line=true
-
-    for s in "${segments[@]}"; do
-        s_width=$(visible_width "$s")
-        if $first_on_line; then
-            current_line="$s"
-            current_width=$s_width
-            first_on_line=false
-        else
-            candidate_width=$(( current_width + ${#sep_visible} + s_width ))
-            if [ "$candidate_width" -le "$COLUMNS" ]; then
-                current_line+="${sep_ansi}${s}"
-                current_width=$candidate_width
-            else
-                printf '%b\n' "$current_line"
-                current_line="$s"
-                current_width=$s_width
-            fi
-        fi
-    done
-    # Emit the last (or only) line, then the update notice if present.
-    printf '%b' "$current_line$update_line"
-else
-    # Fallback: join all segments with the separator into one line (original behavior).
-    out=""
-    first=true
-    for s in "${segments[@]}"; do
-        if $first; then
-            out="$s"
-            first=false
-        else
-            out+="${sep}${s}"
-        fi
-    done
-    printf '%b' "$out$update_line"
-fi
+# ===== Output: one segment per line =====
+for s in "${segments[@]}"; do
+    printf '%b\n' "$s"
+done
+[ -n "$update_line" ] && printf '%b\n' "$update_line"
 
 exit 0
