@@ -133,35 +133,39 @@ if [ -z "$cli_version" ]; then
 fi
 
 # ===== Build single-line output =====
-out=""
-out+="${blue}${model_name}${reset}"
+# segments array: each element is one segment (no separators); joined at output time.
+segments=()
+seg=""
+
+seg="${blue}${model_name}${reset}"
 
 # Current working directory
 cwd=$(echo "$input" | jq -r '.cwd // empty')
 if [ -n "$cwd" ]; then
     display_dir="${cwd##*/}"
     git_branch=$(git -C "${cwd}" rev-parse --abbrev-ref HEAD 2>/dev/null)
-    out+=" ${dim}|${reset} "
-    out+="${cyan}${display_dir}${reset}"
+    segments+=("$seg")
+    seg="${cyan}${display_dir}${reset}"
     if [ -n "$git_branch" ]; then
-        out+="${dim}@${reset}${green}${git_branch}${reset}"
+        seg+="${dim}@${reset}${green}${git_branch}${reset}"
         git_stat=$(git -C "${cwd}" diff --numstat 2>/dev/null | awk '{a+=$1; d+=$2} END {if (a+d>0) printf "+%d -%d", a, d}')
-        [ -n "$git_stat" ] && out+=" ${dim}(${reset}${green}${git_stat%% *}${reset} ${red}${git_stat##* }${reset}${dim})${reset}"
+        [ -n "$git_stat" ] && seg+=" ${dim}(${reset}${green}${git_stat%% *}${reset} ${red}${git_stat##* }${reset}${dim})${reset}"
     fi
 fi
 
-out+=" ${dim}|${reset} "
-out+="${orange}${used_tokens}/${total_tokens}${reset} ${dim}(${reset}${green}${pct_used}%${reset}${dim})${reset}"
-out+=" ${dim}|${reset} "
-out+="effort: "
+segments+=("$seg")
+seg="${orange}${used_tokens}/${total_tokens}${reset} ${dim}(${reset}${green}${pct_used}%${reset}${dim})${reset}"
+segments+=("$seg")
+seg="effort: "
 case "$effort_level" in
-    low)    out+="${dim}${effort_level}${reset}" ;;
-    medium) out+="${orange}med${reset}" ;;
-    high)   out+="${green}${effort_level}${reset}" ;;
-    xhigh)  out+="${purple}${effort_level}${reset}" ;;
-    max)    out+="${red}${effort_level}${reset}" ;;
-    *)      out+="${green}${effort_level}${reset}" ;;
+    low)    seg+="${dim}${effort_level}${reset}" ;;
+    medium) seg+="${orange}med${reset}" ;;
+    high)   seg+="${green}${effort_level}${reset}" ;;
+    xhigh)  seg+="${purple}${effort_level}${reset}" ;;
+    max)    seg+="${red}${effort_level}${reset}" ;;
+    *)      seg+="${green}${effort_level}${reset}" ;;
 esac
+segments+=("$seg")
 
 # ===== Cross-platform OAuth token resolution (from statusline.sh) =====
 # Tries credential sources in order: env var → macOS Keychain → Linux creds file → GNOME Keyring
@@ -372,7 +376,7 @@ format_reset_time() {
 sep=" ${dim}|${reset} "
 
 # Render extra_usage segment from API usage data (not available via stdin rate_limits).
-# Appends to the global $out. No-op when data is missing or is_enabled is false.
+# Appends to the global segments array. No-op when data is missing or is_enabled is false.
 render_extra_usage() {
     local data="$1"
     [ -z "$data" ] && return
@@ -388,9 +392,9 @@ render_extra_usage() {
     if [ -n "$used" ] && [ -n "$limit" ] && [[ "$used" != *'$'* ]] && [[ "$limit" != *'$'* ]]; then
         local color
         color=$(usage_color "$pct")
-        out+="${sep}${white}extra${reset} ${color}\$${used}/\$${limit}${reset}"
+        segments+=("${white}extra${reset} ${color}\$${used}/\$${limit}${reset}")
     else
-        out+="${sep}${white}extra${reset} ${green}enabled${reset}"
+        segments+=("${white}extra${reset} ${green}enabled${reset}")
     fi
 }
 
@@ -400,21 +404,23 @@ if $effective_builtin; then
     if [ -n "$builtin_five_hour_pct" ]; then
         five_hour_pct=$(printf "%.0f" "$builtin_five_hour_pct")
         five_hour_color=$(usage_color "$five_hour_pct")
-        out+="${sep}${white}5h${reset} ${five_hour_color}${five_hour_pct}%${reset}"
+        _fh_seg="${white}5h${reset} ${five_hour_color}${five_hour_pct}%${reset}"
         if [ -n "$builtin_five_hour_reset" ] && [ "$builtin_five_hour_reset" != "null" ]; then
             five_hour_reset=$(date -j -r "$builtin_five_hour_reset" +"%H:%M" 2>/dev/null || date -d "@$builtin_five_hour_reset" +"%H:%M" 2>/dev/null)
-            [ -n "$five_hour_reset" ] && out+=" ${dim}@${five_hour_reset}${reset}"
+            [ -n "$five_hour_reset" ] && _fh_seg+=" ${dim}@${five_hour_reset}${reset}"
         fi
+        segments+=("$_fh_seg")
     fi
 
     if [ -n "$builtin_seven_day_pct" ]; then
         seven_day_pct=$(printf "%.0f" "$builtin_seven_day_pct")
         seven_day_color=$(usage_color "$seven_day_pct")
-        out+="${sep}${white}7d${reset} ${seven_day_color}${seven_day_pct}%${reset}"
+        _sd_seg="${white}7d${reset} ${seven_day_color}${seven_day_pct}%${reset}"
         if [ -n "$builtin_seven_day_reset" ] && [ "$builtin_seven_day_reset" != "null" ]; then
             seven_day_reset=$(date -j -r "$builtin_seven_day_reset" +"%a %b %-d, %H:%M" 2>/dev/null || date -d "@$builtin_seven_day_reset" +"%a %b %-d, %H:%M" 2>/dev/null)
-            [ -n "$seven_day_reset" ] && out+=" ${dim}@${seven_day_reset}${reset}"
+            [ -n "$seven_day_reset" ] && _sd_seg+=" ${dim}@${seven_day_reset}${reset}"
         fi
+        segments+=("$_sd_seg")
     fi
 
     # Render extra_usage from API cache (stdin rate_limits doesn't expose it)
@@ -449,8 +455,9 @@ elif [ -n "$usage_data" ] && echo "$usage_data" | jq -e '.five_hour' >/dev/null 
     five_hour_reset=$(format_reset_time "$five_hour_reset_iso" "time")
     five_hour_color=$(usage_color "$five_hour_pct")
 
-    out+="${sep}${white}5h${reset} ${five_hour_color}${five_hour_pct}%${reset}"
-    [ -n "$five_hour_reset" ] && out+=" ${dim}@${five_hour_reset}${reset}"
+    _fh_seg="${white}5h${reset} ${five_hour_color}${five_hour_pct}%${reset}"
+    [ -n "$five_hour_reset" ] && _fh_seg+=" ${dim}@${five_hour_reset}${reset}"
+    segments+=("$_fh_seg")
 
     # ---- 7-day (weekly) ----
     seven_day_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
@@ -458,14 +465,15 @@ elif [ -n "$usage_data" ] && echo "$usage_data" | jq -e '.five_hour' >/dev/null 
     seven_day_reset=$(format_reset_time "$seven_day_reset_iso" "datetime")
     seven_day_color=$(usage_color "$seven_day_pct")
 
-    out+="${sep}${white}7d${reset} ${seven_day_color}${seven_day_pct}%${reset}"
-    [ -n "$seven_day_reset" ] && out+=" ${dim}@${seven_day_reset}${reset}"
+    _sd_seg="${white}7d${reset} ${seven_day_color}${seven_day_pct}%${reset}"
+    [ -n "$seven_day_reset" ] && _sd_seg+=" ${dim}@${seven_day_reset}${reset}"
+    segments+=("$_sd_seg")
 
     render_extra_usage "$usage_data"
 else
     # No valid usage data — show placeholders
-    out+="${sep}${white}5h${reset} ${dim}-${reset}"
-    out+="${sep}${white}7d${reset} ${dim}-${reset}"
+    segments+=("${white}5h${reset} ${dim}-${reset}")
+    segments+=("${white}7d${reset} ${dim}-${reset}")
 fi
 
 # ===== Update check (cached, 24h TTL) =====
@@ -511,10 +519,58 @@ fi
 
 # Append CLI version as last segment
 if [ -n "$cli_version" ]; then
-    out+=" ${dim}|${reset} ${orange}v${cli_version}${reset}"
+    segments+=("${orange}v${cli_version}${reset}")
 fi
 
-# Output
-printf "%b" "$out$update_line"
+# ===== Output: greedy line-packing when COLUMNS is set, else single line =====
+# Strip ANSI escape sequences to measure visible width.
+visible_width() {
+    local s
+    s=$(printf '%b' "$1" | sed 's/\x1b\[[0-9;]*m//g')
+    printf '%s' "${#s}"
+}
+
+if [[ "$COLUMNS" =~ ^[0-9]+$ ]] && [ "$COLUMNS" -gt 0 ]; then
+    # Greedy packing: accumulate segments onto lines, wrapping at segment boundaries.
+    sep_visible=" | "
+    sep_ansi=" ${dim}|${reset} "
+    current_line=""
+    current_width=0
+    first_on_line=true
+
+    for s in "${segments[@]}"; do
+        s_width=$(visible_width "$s")
+        if $first_on_line; then
+            current_line="$s"
+            current_width=$s_width
+            first_on_line=false
+        else
+            candidate_width=$(( current_width + ${#sep_visible} + s_width ))
+            if [ "$candidate_width" -le "$COLUMNS" ]; then
+                current_line+="${sep_ansi}${s}"
+                current_width=$candidate_width
+            else
+                printf '%b\n' "$current_line"
+                current_line="$s"
+                current_width=$s_width
+            fi
+        fi
+    done
+    # Emit the last (or only) line, then the update notice if present.
+    printf '%b' "$current_line$update_line"
+else
+    # Fallback: join all segments with the separator into one line (original behavior).
+    out=""
+    first=true
+    for s in "${segments[@]}"; do
+        if $first; then
+            out="$s"
+            first=false
+        else
+            out+="${sep}${s}"
+        fi
+    done
+    printf '%b' "$out$update_line"
+fi
 
 exit 0
